@@ -13,10 +13,10 @@ from telegram.ext import (
 )
 
 # ── 环境变量 ──────────────────────────────────────
-BOT_TOKEN    = os.getenv("BOT_TOKEN")
-SHEET_ID     = os.getenv("SHEET_ID")
-SHEET_NAMES  = os.getenv("SHEET_NAMES", "Sheet1").split(",")
-PORT         = int(os.getenv("PORT", 8080))
+BOT_TOKEN  = os.getenv("BOT_TOKEN")
+SHEET_ID   = os.getenv("SHEET_ID")
+SHEET_GIDS = os.getenv("SHEET_GIDS", "0").split(",")
+PORT       = int(os.getenv("PORT", 8080))
 
 # ── 对话状态 ──────────────────────────────────────
 WAITING_KEY = 1
@@ -33,21 +33,19 @@ class KeepAlive(BaseHTTPRequestHandler):
 def run_http():
     HTTPServer(("0.0.0.0", PORT), KeepAlive).serve_forever()
 
-# ── 读取工作表（按标签名）────────────────────────
-def fetch_sheet_by_name(sheet_name):
-    encoded_name = urllib.parse.quote(sheet_name)
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={encoded_name}"
+# ── 读取工作表（按 gid）──────────────────────────
+def fetch_sheet_by_gid(gid):
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid.strip()}"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req) as response:
         content = response.read().decode("utf-8")
     return list(csv.reader(content.splitlines()))
 
-# ── 查密钥（遍历所有标签名）──────────────────────
+# ── 查密钥（遍历所有 gid）────────────────────────
 def lookup_key(key: str):
-    for name in SHEET_NAMES:
-        name = name.strip()
+    for gid in SHEET_GIDS:
         try:
-            rows = fetch_sheet_by_name(name)
+            rows = fetch_sheet_by_gid(gid)
             if not rows:
                 continue
             headers = rows[0]
@@ -55,7 +53,7 @@ def lookup_key(key: str):
                 if row and row[0].strip() == key.strip():
                     return headers, row
         except Exception as e:
-            print(f"读取标签「{name}」失败: {e}")
+            print(f"读取 gid={gid} 失败: {e}")
             continue
     return None
 
