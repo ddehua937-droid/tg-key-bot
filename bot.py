@@ -24,23 +24,51 @@ class KeepAlive(BaseHTTPRequestHandler):
 def run_http():
     HTTPServer(("0.0.0.0", PORT), KeepAlive).serve_forever()
 
-# ── 读取 Google Sheet（CSV方式）─────────────────────
-def fetch_sheet():
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+# ── 获取所有工作表的 gid ──────────────────────────
+def get_sheet_gids():
+    """从 Sheet 的 HTML 页面抓取所有 tab 的 gid"""
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as response:
+        html = response.read().decode("utf-8")
+    
+    import re
+    gids = re.findall(r'"gid=(\d+)"', html)
+    # 去重并保持顺序
+    seen = set()
+    result = []
+    for g in gids:
+        if g not in seen:
+            seen.add(g)
+            result.append(g)
+    return result if result else ["0"]
+
+# ── 读取某个工作表（CSV方式）────────────────────────
+def fetch_sheet_by_gid(gid):
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
     with urllib.request.urlopen(url) as response:
         content = response.read().decode("utf-8")
     reader = csv.reader(content.splitlines())
     return list(reader)
 
-# ── 查密钥 ────────────────────────────────────────
+# ── 查密钥（遍历所有工作表）──────────────────────────
 def lookup_key(key: str):
-    rows = fetch_sheet()
-    if not rows:
-        return None
-    headers = rows[0]
-    for row in rows[1:]:
-        if row and row[0].strip() == key.strip():
-            return headers, row
+    try:
+        gids = get_sheet_gids()
+    except:
+        gids = ["0"]  # 抓取失败就只查第一个表
+
+    for gid in gids:
+        try:
+            rows = fetch_sheet_by_gid(gid)
+            if not rows:
+                continue
+            headers = rows[0]
+            for row in rows[1:]:
+                if row and row[0].strip() == key.strip():
+                    return headers, row
+        except:
+            continue
     return None
 
 # ── 消息处理 ──────────────────────────────────────
