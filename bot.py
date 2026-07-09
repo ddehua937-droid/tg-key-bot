@@ -14,11 +14,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID  = os.getenv("SHEET_ID")
 PORT      = int(os.getenv("PORT", 8080))
 
-# 标签配置：按钮名称 -> gid
 SHEETS = {
-    "🏪 收银台查询": "0",
-    "🎮 9494查询": "103160501",
-    "💴 数字人民币查询": "133972497",
+    "收银台查询": "0",
+    "9494查询": "103160501",
+    "数字人民币查询": "133972497",
+    "强盛查询": "690514313",
 }
 
 WAITING_KEY = 1
@@ -50,7 +50,6 @@ def lookup_key(key: str, gid: str):
             return headers, row
     return None
 
-# ── 主菜单（直接显示三个查询按钮）──────────────────
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(name, callback_data=f"sheet_{gid}")] for name, gid in SHEETS.items()]
     markup = InlineKeyboardMarkup(keyboard)
@@ -67,7 +66,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data.startswith("sheet_"):
         gid = query.data.replace("sheet_", "")
         name = next((n for n, g in SHEETS.items() if g == gid), gid)
@@ -75,7 +73,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["sheet_name"] = name
         await query.edit_message_text(f"{name}\n\n请输入您的查询密钥：")
         return WAITING_KEY
-
     elif query.data == "back":
         await show_menu(update, context)
         return ConversationHandler.END
@@ -84,23 +81,17 @@ async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = update.message.text.strip()
     gid = context.user_data.get("gid")
     sheet_name = context.user_data.get("sheet_name", "")
-
-    keyboard = [
-        [InlineKeyboardButton("🔄 重新选择工资表", callback_data="back")],
-    ]
+    keyboard = [[InlineKeyboardButton("🔄 重新选择工资表", callback_data="back")]]
     markup = InlineKeyboardMarkup(keyboard)
-
     if not gid:
         await update.message.reply_text("⚠️ 请先选择工资表。", reply_markup=markup)
         return ConversationHandler.END
-
     try:
         result = lookup_key(key, gid)
     except Exception as e:
         print(f"查询出错: {e}")
         await update.message.reply_text("⚠️ 查询出错，请稍后重试。", reply_markup=markup)
         return ConversationHandler.END
-
     if result is None:
         await update.message.reply_text("❌ 密钥无效，请检查后重试。", reply_markup=markup)
     else:
