@@ -95,7 +95,8 @@ async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = []
         for i, header in enumerate(headers):
             value = row[i] if i < len(row) else ""
-            lines.append(f"{header}: {value}")
+            if value.strip() not in ("", "0"):
+                lines.append(f"{header}: {value}")
         await update.message.reply_text("✅ 查询成功：\n\n" + "\n".join(lines), reply_markup=markup)
     return ConversationHandler.END
 
