@@ -1,16 +1,23 @@
 import os
 import csv
+import re
 import threading
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, MessageHandler, CallbackQueryHandler,
+    CommandHandler, filters, ContextTypes, ConversationHandler
+)
 
 # ── 环境变量 ──────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_ID  = os.getenv("SHEET_ID")
 PORT      = int(os.getenv("PORT", 8080))
+
+# ── 对话状态 ──────────────────────────────────────
+WAITING_KEY = 1
 
 # ── 保活 HTTP ─────────────────────────────────────
 class KeepAlive(BaseHTTPRequestHandler):
@@ -24,17 +31,24 @@ class KeepAlive(BaseHTTPRequestHandler):
 def run_http():
     HTTPServer(("0.0.0.0", PORT), KeepAlive).serve_forever()
 
-# ── 获取所有工作表的 gid ──────────────────────────
-def get_sheet_gids():
-    """从 Sheet 的 HTML 页面抓取所有 tab 的 gid"""
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+# ── 读取工作表 ────────────────────────────────────
+def fetch_sheet_by_gid(gid):
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req) as response:
+        content = response.read().decode("utf-8")
+    return list(csv.reader(content.splitlines()))
+
+def get_all_gids():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    })
+    with urllib.request.urlopen(req) as response:
         html = response.read().decode("utf-8")
-    
-    import re
-    gids = re.findall(r'"gid=(\d+)"', html)
-    # 去重并保持顺序
+    gids = re.findall(r'"sheetId":(\d+)', html)
+    if not gids:
+        gids = re.findall(r'gid=(\d+)', html)
     seen = set()
     result = []
     for g in gids:
@@ -43,21 +57,11 @@ def get_sheet_gids():
             result.append(g)
     return result if result else ["0"]
 
-# ── 读取某个工作表（CSV方式）────────────────────────
-def fetch_sheet_by_gid(gid):
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
-    with urllib.request.urlopen(url) as response:
-        content = response.read().decode("utf-8")
-    reader = csv.reader(content.splitlines())
-    return list(reader)
-
-# ── 查密钥（遍历所有工作表）──────────────────────────
 def lookup_key(key: str):
     try:
-        gids = get_sheet_gids()
+        gids = get_all_gids()
     except:
-        gids = ["0"]  # 抓取失败就只查第一个表
-
+        gids = ["0"]
     for gid in gids:
         try:
             rows = fetch_sheet_by_gid(gid)
@@ -71,28 +75,83 @@ def lookup_key(key: str):
             continue
     return None
 
-# ── 消息处理 ──────────────────────────────────────
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text.strip()
-    result = lookup_key(user_input)
+# ── 主菜单 ────────────────────────────────────────
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("💰 查询工资", callback_data="salary")],
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    text = "👋 欢迎使用！\n\n请选择您需要的服务："
+
+    if update.message:
+        await update.message.reply_text(text, reply_markup=markup)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=markup)
+
+# ── /start 命令 ───────────────────────────────────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_menu(update, context)
+    return ConversationHandler.END
+
+# ── 按钮回调 ──────────────────────────────────────
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "salary":
+        await query.edit_message_text("💰 请输入您的工资查询密钥：")
+        return WAITING_KEY
+
+    elif query.data == "back":
+        await show_menu(update, context)
+        return ConversationHandler.END
+
+# ── 处理密钥查询 ──────────────────────────────────
+async def handle_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    key = update.message.text.strip()
+    result = lookup_key(key)
+
+    keyboard = [[InlineKeyboardButton("🔙 返回主菜单", callback_data="back")]]
+    markup = InlineKeyboardMarkup(keyboard)
 
     if result is None:
-        await update.message.reply_text("❌ 密钥无效，请检查后重试。")
-        return
-
-    headers, row = result
-    lines = []
-    for i, header in enumerate(headers):
-        value = row[i] if i < len(row) else ""
-        lines.append(f"{header}: {value}")
-
-    await update.message.reply_text("\n".join(lines))
+        await update.message.reply_text(
+            "❌ 密钥无效，请检查后重试。",
+            reply_markup=markup
+        )
+    else:
+        headers, row = result
+        lines = []
+        for i, header in enumerate(headers):
+            value = row[i] if i < len(row) else ""
+            lines.append(f"{header}: {value}")
+        await update.message.reply_text(
+            "✅ 查询成功：\n\n" + "\n".join(lines),
+            reply_markup=markup
+        )
+    return ConversationHandler.END
 
 # ── 启动 ──────────────────────────────────────────
 def main():
     threading.Thread(target=run_http, daemon=True).start()
+
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(button_handler)
+        ],
+        states={
+            WAITING_KEY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_key),
+                CallbackQueryHandler(button_handler)
+            ],
+        },
+        fallbacks=[CommandHandler("start", start)],
+    )
+
+    app.add_handler(conv_handler)
     print("✅ Bot 启动成功")
     app.run_polling()
 
